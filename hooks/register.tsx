@@ -4,7 +4,16 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Active, Master, SessionInfo, Snapshot } from '../types'
 import { formatElapsed, formatEta } from './eta'
 import { fitLine, rule } from './layout'
-import { buildSnapshot, detectRepo, fallbackPlan, ioFrom, isPlanPath, latestLedgerPlan, toRepoRelative } from './progress'
+import {
+  buildSnapshot,
+  detectRepo,
+  fallbackPlan,
+  ioFrom,
+  isPlanPath,
+  latestLedgerPlan,
+  toRepoRelative,
+  worktreeRoots,
+} from './progress'
 
 const snapshot = atom({ plugin: 'plan-progress', key: 'snapshot' } as const, null as Snapshot | null)
 const isExpanded = atom({ plugin: 'plan-progress', key: 'isExpanded' } as const, false)
@@ -14,24 +23,55 @@ const session = atom({ plugin: 'plan-progress', key: 'session' } as const, null 
 
 const REFRESH_EVERY_MS = 2000
 
+// Created on first need, not only at session.start: /clear starts no session.start, and a git
+// that failed to spawn must be retried rather than pinned.
+async function ensureSession($: EngineInterface, cwd?: string): Promise<SessionInfo | null> {
+  const existing = await read($, session)
+  if (existing) return existing
+  const now = await $.clock.now()
+  try {
+    const repo = await detectRepo(ioFrom($), cwd ?? (await $.session.cwd()))
+    const created = { id: String(now), startedAt: now, ...repo }
+    await update($, session, () => created)
+    return created
+  } catch {
+    return null
+  }
+}
+
 async function refresh($: EngineInterface): Promise<void> {
-  const s = await read($, session)
+  const s = await ensureSession($)
   if (!s) return
   const io = ioFrom($)
   const now = await $.clock.now()
+  const roots = await worktreeRoots(io, s.root)
 
   let current = await read($, master)
-  const ledger = await latestLedgerPlan(io, s.root, current?.at ?? s.startedAt)
+  const ledger = await latestLedgerPlan(io, roots, current?.at ?? s.startedAt)
   if (ledger) {
     current = ledger
     await update($, master, () => ledger)
   }
 
-  const planPath = current?.planPath ?? (await fallbackPlan(io, s.root, s.key))
+  const planPath = current?.planPath ?? (await fallbackPlan(io, roots, s.key))
   const a = await read($, active)
   const activeMs = a.accumulatedMs + (a.since === null ? 0 : now - a.since)
-  const next = planPath ? await buildSnapshot(io, s, planPath, activeMs) : null
+  const next = planPath ? await buildSnapshot(io, s, roots, planPath, activeMs) : null
   await update($, snapshot, () => next)
+}
+
+// Reset by a reload, which only costs one more log line.
+let hasLoggedFailure = false
+
+// A failed reread keeps the last good snapshot on screen; the reason is logged once per load.
+async function safeRefresh($: EngineInterface): Promise<void> {
+  try {
+    await refresh($)
+  } catch (error) {
+    if (hasLoggedFailure) return
+    hasLoggedFailure = true
+    $.ui.log(`plan-progress: refresh failed, keeping the last view: ${String(error)}`)
+  }
 }
 
 export const register: Register = on => {
@@ -40,35 +80,34 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'progress', description: 'Expand or collapse the plan progress band' })
-    // A reload runs session.start again: keep the session it already has.
-    if (!(await read($, session))) {
-      const now = await $.clock.now()
-      const repo = await detectRepo(ioFrom($), e.cwd)
-      await update($, session, () => ({ id: String(now), startedAt: now, ...repo }))
-    }
-    await refresh($)
+    // A reload runs session.start again: ensureSession keeps the session it already has.
+    await ensureSession($, e.cwd)
+    await safeRefresh($)
 
     return next(e)
   })
 
+  // Active time runs while any turn is open, main loop or a background subagent's.
   on('turn.start', async ($, e, next) => {
-    if (!e.agentId) {
-      const now = await $.clock.now()
-      await update($, active, a => ({ ...a, since: now }))
-    }
+    const now = await $.clock.now()
+    await update($, active, a => {
+      const open = a.open ?? []
+      return { ...a, open: [...open, e.turnId], since: open.length === 0 ? now : a.since }
+    })
 
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (!e.agentId) {
-      const now = await $.clock.now()
-      await update($, active, a => ({
-        accumulatedMs: a.accumulatedMs + (a.since === null ? 0 : now - a.since),
-        since: null,
-      }))
+    const now = await $.clock.now()
+    await update($, active, a => {
+      const open = (a.open ?? []).filter(id => id !== e.turnId)
+      if (open.length > 0) return { ...a, open }
+      return { accumulatedMs: a.accumulatedMs + (a.since === null ? 0 : now - a.since), since: null, open }
+    })
+    if (!e.agentId || now - lastRefreshAt >= REFRESH_EVERY_MS) {
       lastRefreshAt = now
-      await refresh($)
+      await safeRefresh($)
     }
 
     return next(e)
@@ -78,13 +117,14 @@ export const register: Register = on => {
     const ran = await next(e)
     const now = await $.clock.now()
 
-    if ((e.tool === 'Write' || e.tool === 'Edit') && isPlanPath(e.file_path)) {
+    const isWritten = ran.deny === undefined && ran.isError !== true
+    if (isWritten && (e.tool === 'Write' || e.tool === 'Edit') && isPlanPath(e.file_path)) {
       const s = await read($, session)
       if (s) await update($, master, () => ({ planPath: toRepoRelative(s.root, e.file_path), at: now }))
     }
     if (now - lastRefreshAt >= REFRESH_EVERY_MS) {
       lastRefreshAt = now
-      await refresh($)
+      await safeRefresh($)
     }
 
     return ran
@@ -111,9 +151,9 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Text color="promptBorder" wrap="truncate-end">{rule(cols)}</Text>
-        <Button key="toggle" onPress={() => update($, isExpanded, v => !v)}>
-          <Text color="suggestion">{'━'.repeat(line.filled)}</Text>
-          <Text color="inactive">{'━'.repeat(line.empty)}</Text>
+        <Button key="toggle" plain onPress={() => update($, isExpanded, v => !v)}>
+          <Text color="suggestion" wrap="truncate-end">{'━'.repeat(line.filled)}</Text>
+          <Text color="inactive" wrap="truncate-end">{'━'.repeat(line.empty)}</Text>
           <Text wrap="truncate-end">{line.text}</Text>
         </Button>
         {expanded &&

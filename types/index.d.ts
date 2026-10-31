@@ -14,7 +14,7 @@ export type PlanRecord = {
   isFinished: boolean
 }
 export type Master = { planPath: string; at: number }
-export type Active = { accumulatedMs: number; since: number | null }
+export type Active = { accumulatedMs: number; since: number | null; open?: string[] }
 export type SessionInfo = { id: string; startedAt: number; root: string; key: string }
 
 declare module 'claude-code' {

@@ -109,17 +109,20 @@ test('a hot reload keeps the session and its active time', async ($, on) => {
   expect(writes.includes('active')).toBe(false)
 })
 
-test('subagent turns do not move active time', async ($, on) => {
-  mock.clock(on, { now: 1000 })
-  const writes: string[] = []
+test('a background subagent turn counts as active time', async ($, on) => {
+  const clock = mock.clock(on, { now: 1000 })
+  const actives: { accumulatedMs: number }[] = []
   on('state.set', (_, e, next) => {
-    writes.push(e.key)
+    if (e.key === 'active') actives.push(e.value as { accumulatedMs: number })
     return next(e)
   })
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
 
   await $.turn.start({ text: '', turnId: 't1', agentId: 'a1' })
-  expect(writes.includes('active')).toBe(false)
+  await clock.advance(5000)
+  await $.turn.complete({ turnId: 't1', agentId: 'a1', answer: '', durationMs: 0 } as never)
+  expect(actives.at(-1)?.accumulatedMs).toBe(5000)
 })
 
 test('writing a plan file makes it the master', async ($, on) => {
@@ -134,4 +137,81 @@ test('writing a plan file makes it the master', async ($, on) => {
 
   await $.tool.call({ tool: 'Write', file_path: '/r/docs/superpowers/plans/2026-10-31-x.md', content: '' })
   expect(masters).toEqual([{ planPath: 'docs/superpowers/plans/2026-10-31-x.md', at: 1000 }])
+})
+
+test('the line is a plain Button so the terminal draws no [ ] chrome', async ($, on) => {
+  seedState(on, { snapshot: SNAP })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  expect((await ui.find({ key: 'toggle' }))?.props.plain).toBe(true)
+  await ui.unmount()
+})
+
+test('a session missing at refresh (after /clear) is created from the session cwd', async ($, on) => {
+  mock.clock(on, { now: 1000 })
+  const sessions: unknown[] = []
+  on('state.set', (_, e, next) => {
+    if (e.key === 'session') sessions.push(e.value)
+    return next(e)
+  })
+  on('session.cwd', () => ({ value: '/w' }))
+  on('process.run', () => ({ value: { exitCode: 128, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 0 } as never)
+  expect(sessions.at(-1)).toEqual({ id: '1000', startedAt: 1000, root: '/w', key: '/w' })
+})
+
+test('git failing to start leaves no session, so the next refresh retries', async ($, on) => {
+  mock.clock(on, { now: 1000 })
+  const sessions: unknown[] = []
+  on('state.set', (_, e, next) => {
+    if (e.key === 'session') sessions.push(e.value)
+    return next(e)
+  })
+  on('command.register', () => ({ value: { command: 'progress' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('process.run', () => {
+    throw new Error('spawn git ENOENT')
+  })
+
+  await $.session.start({ cwd: '/r', surface: 'terminal', isInteractive: true })
+  expect(sessions).toEqual([])
+})
+
+test('a denied plan write does not become the master', async ($, on) => {
+  mock.clock(on, { now: 1000 })
+  seedState(on, { session: { id: 's1', startedAt: 0, root: '/r', key: '/r' } })
+  const masters: unknown[] = []
+  on('state.set', (_, e, next) => {
+    if (e.key === 'master') masters.push(e.value)
+    return next(e)
+  })
+  on('tool.call', () => ({ deny: 'no' }))
+
+  await $.tool.call({ tool: 'Write', file_path: '/r/docs/superpowers/plans/2026-10-31-x.md', content: '' })
+  expect(masters).toEqual([])
+})
+
+test('a failing read keeps the last snapshot instead of blanking the band', async ($, on) => {
+  mock.clock(on, { now: 1000 })
+  mock.store(on)
+  seedState(on, { session: { id: 's1', startedAt: 0, root: '/r', key: '/r' } })
+  const snapshots: unknown[] = []
+  on('state.set', (_, e, next) => {
+    if (e.key === 'snapshot') snapshots.push(e.value)
+    return next(e)
+  })
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('fs.list', (_, e) =>
+    e.path.endsWith('plans') ? { value: [{ name: 'a.md', kind: 'file', size: 0, mtimeMs: 0, isLink: false }] } : { value: [] },
+  )
+  on('fs.read', () => {
+    throw new Error('EIO')
+  })
+  on('fs.exists', () => ({ value: true }))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 0 } as never)
+  expect(snapshots).toEqual([])
 })

@@ -69,13 +69,13 @@ Verified against Superpowers 7.0.0 (`writing-plans`, `subagent-driven-developmen
 
 **When to reread** *(my call)*: SDD appends to the ledger with Bash as often as with Write/Edit, so path-matching tool calls would miss updates. Instead, reread the plan and the ledgers after every `tool.call` (any agent; `tool.call` fires for subagents too, with `agentId`) and at `turn.complete`, debounced to at most once per ~2s. The files are small. Step 2 of master selection works the same way: on reread, scan `.superpowers/sdd/*/progress.md` first lines and look for a ledger that is new or changed since the last read and names a plan.
 
-**Paths and keys** *(my call)*: the repo root is the git top-level of `$.session.cwd()`. In an SDD worktree, plans and ledgers are read from the worktree. Finished-plan records and ETA history are keyed by git common-dir + repo-relative plan path, so the main checkout and its worktrees share them.
+**Paths and keys** *(my call)*: the repo root is the git top-level of `$.session.cwd()`. Ledgers are read from every working tree (`git worktree list`), and a plan is read from the worktree of its newest ledger. Finished-plan records and ETA history are keyed by git common-dir + repo-relative plan path, so the main checkout and its worktrees share them.
 
 **Master persistence** *(my call)*: the chosen master is kept in `$.state`, so it survives reloads and `/clear`. A fresh session starts at the fallback, step 3.
 
 ## ETA
 
-- Count only **active time**: time while a main-loop turn is running (`turn.start` → `turn.complete` with no `agentId`; subagents run inside it). Time spent waiting on Dylan isn't counted.
+- Count only **active time**: time while **any** turn is open, the main loop's or a background subagent's (tracked by open `turnId`s). In this build, subagents run in the background after the controller's turn ends, so main-loop-only timing would miss most of the work. Time spent waiting on Dylan with nothing running isn't counted. *(Amended after final review.)*
 - A task's duration is the active time accumulated since the previous task flipped to done *(my call)*. An SDD run is one long turn, so turn boundaries can't delimit tasks.
 - When several tasks flip at once (detected in one reread), the accumulated time is split evenly between them *(my call)*.
 - Record each task's active duration when it flips to done (`$.store`, per plan), so the history survives reloads and restarts.

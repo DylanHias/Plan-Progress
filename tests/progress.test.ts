@@ -9,6 +9,7 @@ import {
   latestLedgerPlan,
   toRepoRelative,
   type Io,
+  worktreeRoots,
 } from '../hooks/progress'
 
 type FakeFile = { text: string; mtimeMs?: number }
@@ -73,7 +74,7 @@ test('isPlanPath', () => {
 })
 
 test('no plans dir: fallback is null and nothing throws', async () => {
-  expect(await fallbackPlan(fakeIo({}).io, '/r', '/r')).toBe(null)
+  expect(await fallbackPlan(fakeIo({}).io, ['/r'], '/r')).toBe(null)
 })
 
 test('fallback picks the newest in-progress plan, skipping complete, finished and unstarted ones', async () => {
@@ -87,7 +88,7 @@ test('fallback picks the newest in-progress plan, skipping complete, finished an
   })
   const finished: PlanRecord = { done: [], durationsMs: [], mark: null, isFinished: true }
   store.set(`plan:/r:${P}/2026-10-20-finished.md`, finished)
-  expect(await fallbackPlan(io, '/r', '/r')).toBe(`${P}/2026-10-10-ledgered.md`)
+  expect(await fallbackPlan(io, ['/r'], '/r')).toBe(`${P}/2026-10-10-ledgered.md`)
 })
 
 test('a ledger newer than the cutoff wins, an older one is ignored, absolute paths become relative', async () => {
@@ -95,9 +96,9 @@ test('a ledger newer than the cutoff wins, an older one is ignored, absolute pat
     '/r/.superpowers/sdd/a/progress.md': { text: LEDGER(`/r/${P}/a.md`, []), mtimeMs: 50 },
     '/r/.superpowers/sdd/b/progress.md': { text: LEDGER(`${P}/b.md`, []), mtimeMs: 200 },
   })
-  expect(await latestLedgerPlan(io, '/r', 100)).toEqual({ planPath: `${P}/b.md`, at: 200 })
-  expect(await latestLedgerPlan(io, '/r', 300)).toBe(null)
-  expect((await latestLedgerPlan(io, '/r', 10))?.planPath).toBe(`${P}/b.md`)
+  expect(await latestLedgerPlan(io, ['/r'], 100)).toEqual({ planPath: `${P}/b.md`, at: 200 })
+  expect(await latestLedgerPlan(io, ['/r'], 300)).toBe(null)
+  expect((await latestLedgerPlan(io, ['/r'], 10))?.planPath).toBe(`${P}/b.md`)
 })
 
 test('snapshot merges ledger and checkboxes, then records flips', async () => {
@@ -106,9 +107,9 @@ test('snapshot merges ledger and checkboxes, then records flips', async () => {
     '/r/.superpowers/sdd/x/progress.md': { text: LEDGER(`${P}/2026-10-31-x.md`, [1]), mtimeMs: 1 },
   }
   const { io, store } = fakeIo(files)
-  const s = { root: '/r', key: '/r', id: 's1' }
+  const s = { key: '/r', id: 's1' }
 
-  const first = await buildSnapshot(io, s, `${P}/2026-10-31-x.md`, 1000)
+  const first = await buildSnapshot(io, s, ['/r'], `${P}/2026-10-31-x.md`, 1000)
   expect(first?.planName).toBe('x')
   expect(first?.tasks.map(t => t.isDone)).toEqual([true, true, false])
   expect(first?.eta).toBe(null)
@@ -116,24 +117,68 @@ test('snapshot merges ledger and checkboxes, then records flips', async () => {
 
   files['/r/.superpowers/sdd/x/progress.md'] = { text: LEDGER(`${P}/2026-10-31-x.md`, [1, 3]), mtimeMs: 2 }
   files[`/r/${P}/2026-10-31-x.md`] = { text: `${PLAN(3, [2])}\n### Task 4: T4\n- [ ] s\n` }
-  await buildSnapshot(io, s, `${P}/2026-10-31-x.md`, 61000)
+  await buildSnapshot(io, s, ['/r'], `${P}/2026-10-31-x.md`, 61000)
   expect((store.get(`plan:/r:${P}/2026-10-31-x.md`) as PlanRecord).durationsMs).toEqual([60000])
 })
 
 test('a plan that has not started yields no snapshot', async () => {
   const { io } = fakeIo({ [`/r/${P}/a.md`]: { text: PLAN(2) } })
-  expect(await buildSnapshot(io, { root: '/r', key: '/r', id: 's1' }, `${P}/a.md`, 0)).toBe(null)
+  expect(await buildSnapshot(io, { key: '/r', id: 's1' }, ['/r'], `${P}/a.md`, 0)).toBe(null)
 })
 
 test('a complete plan is stored as finished and yields no snapshot', async () => {
   const { io, store } = fakeIo({ [`/r/${P}/a.md`]: { text: PLAN(2, [1, 2]) } })
-  expect(await buildSnapshot(io, { root: '/r', key: '/r', id: 's1' }, `${P}/a.md`, 0)).toBe(null)
+  expect(await buildSnapshot(io, { key: '/r', id: 's1' }, ['/r'], `${P}/a.md`, 0)).toBe(null)
   expect((store.get(`plan:/r:${P}/a.md`) as PlanRecord).isFinished).toBe(true)
 })
 
 test('a plan with no task headings, or missing, yields no snapshot', async () => {
   const { io } = fakeIo({ [`/r/${P}/a.md`]: { text: '# Design\n- [x] x' } })
-  const s = { root: '/r', key: '/r', id: 's1' }
-  expect(await buildSnapshot(io, s, `${P}/a.md`, 0)).toBe(null)
-  expect(await buildSnapshot(io, s, `${P}/gone.md`, 0)).toBe(null)
+  const s = { key: '/r', id: 's1' }
+  expect(await buildSnapshot(io, s, ['/r'], `${P}/a.md`, 0)).toBe(null)
+  expect(await buildSnapshot(io, s, ['/r'], `${P}/gone.md`, 0)).toBe(null)
+})
+
+test('toRepoRelative prefers the docs marker over the root prefix (nested worktree)', () => {
+  expect(toRepoRelative('/r', `/r/.worktrees/x/${P}/a.md`)).toBe(`${P}/a.md`)
+})
+
+test('worktreeRoots lists every working tree, main first', async () => {
+  const io: Io = {
+    ...fakeIo({}).io,
+    run: async () => ({ exitCode: 0, stdout: 'worktree /r\nHEAD abc\nbranch refs/heads/main\n\nworktree /r/.worktrees/x\nHEAD def\n' }),
+  }
+  expect(await worktreeRoots(io, '/r')).toEqual(['/r', '/r/.worktrees/x'])
+  expect(await worktreeRoots(fakeIo({}).io, '/r')).toEqual(['/r'])
+})
+
+test('an SDD run in a worktree shows: its ledger and plan are read there', async () => {
+  const { io } = fakeIo({
+    [`/r/${P}/a.md`]: { text: PLAN(2) },
+    [`/r/.worktrees/x/${P}/a.md`]: { text: PLAN(2) },
+    '/r/.worktrees/x/.superpowers/sdd/a/progress.md': { text: LEDGER(`${P}/a.md`, [1]), mtimeMs: 9 },
+  })
+  const roots = ['/r', '/r/.worktrees/x']
+  expect(await latestLedgerPlan(io, roots, 0)).toEqual({ planPath: `${P}/a.md`, at: 9 })
+  const snap = await buildSnapshot(io, { key: '/r', id: 's1' }, roots, `${P}/a.md`, 0)
+  expect(snap?.tasks.map(t => t.isDone)).toEqual([true, false])
+})
+
+test('a read that fails (not a missing file) leaves the stored record untouched', async () => {
+  const { io, store } = fakeIo({
+    [`/r/${P}/a.md`]: { text: PLAN(3) },
+    '/r/.superpowers/sdd/a/progress.md': { text: LEDGER(`${P}/a.md`, [1]), mtimeMs: 1 },
+  })
+  const s = { key: '/r', id: 's1' }
+  await buildSnapshot(io, s, ['/r'], `${P}/a.md`, 0)
+  const before = store.get(`plan:/r:${P}/a.md`)
+  const failing: Io = {
+    ...io,
+    read: async path => {
+      if (path.endsWith('progress.md')) throw new Error('EIO')
+      return io.read(path)
+    },
+  }
+  await expect(buildSnapshot(failing, s, ['/r'], `${P}/a.md`, 5000)).rejects.toThrow('EIO')
+  expect(store.get(`plan:/r:${P}/a.md`)).toEqual(before)
 })

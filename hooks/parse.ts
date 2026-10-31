@@ -3,7 +3,7 @@ import type { PlanTask } from '../types'
 const TASK_HEADING = /^###\s+Task\s+(\d+)\s*[:—–-]\s*(.+?)\s*$/
 const ANY_HEADING = /^#{1,3}\s/
 const CHECKBOX = /^\s*- \[([ xX])\]/
-const LEDGER_IDENTITY = /^# SDD ledger — plan:\s*(.+?)\s*$/
+const LEDGER_IDENTITY = /^# SDD ledger\s*[—–-]\s*plan:\s*(.+?)\s*$/
 const LEDGER_COMPLETE = /^Task\s+(\d+):\s*complete\b/
 
 export function parsePlan(text: string): PlanTask[] {
@@ -32,7 +32,9 @@ export function parsePlan(text: string): PlanTask[] {
 }
 
 export function parseLedger(text: string): { planPath: string; completed: Set<number> } | null {
-  const [first = '', ...rest] = text.split('\n')
+  const lines = text.replace(/^\uFEFF/, '').split('\n')
+  const start = lines.findIndex(line => line.trim() !== '')
+  const [first = '', ...rest] = start < 0 ? [] : lines.slice(start)
   const identity = LEDGER_IDENTITY.exec(first)
   if (!identity?.[1]) return null
 

@@ -49,3 +49,10 @@ test('done is ledger OR all ticked, and zero boxes is not done', () => {
 test('planName strips the date prefix and .md', () => {
   expect(planName('docs/superpowers/plans/2026-10-31-auth-refactor.md')).toBe('auth-refactor')
 })
+
+test('the ledger header tolerates a BOM, leading blank lines and a plain dash', () => {
+  expect(parseLedger('﻿\n# SDD ledger - plan: docs/superpowers/plans/a.md\nTask 2: complete')?.planPath).toBe(
+    'docs/superpowers/plans/a.md',
+  )
+  expect(parseLedger('\n\n# SDD ledger – plan: x.md\nTask 2: complete')?.completed.has(2)).toBe(true)
+})
