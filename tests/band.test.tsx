@@ -43,6 +43,7 @@ test('collapsed: a rule and one line sized to the band', async ($, on) => {
   const line = await ui.find({ key: 'toggle' })
   expect(line?.text).toMatch(/1\/3 · ETA — · Token refresh ▸$/)
   expect(line?.text.length).toBe(60)
+  expect(line?.text).toMatch(/^█+░+  1\/3/)
   expect(await ui.find({ type: 'Text', text: /✓ 1/ })).toBeUndefined()
   await ui.unmount()
 })

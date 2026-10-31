@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Active, Master, SessionInfo, Snapshot } from '../types'
 import { formatElapsed, formatEta } from './eta'
-import { fitLine, rule } from './layout'
+import { fitLine, gradient, rule } from './layout'
 import {
   buildSnapshot,
   detectRepo,
@@ -22,6 +22,10 @@ const active = atom({ plugin: 'plan-progress', key: 'active' } as const, { accum
 const session = atom({ plugin: 'plan-progress', key: 'session' } as const, null as SessionInfo | null)
 
 const REFRESH_EVERY_MS = 2000
+const BAR_FROM = '#3b82f6'
+const BAR_TO = '#22c55e'
+const CURRENT = '#60a5fa'
+const DONE_NAME = '#a1a1aa'
 
 // Created on first need, not only at session.start: /clear starts no session.start, and a git
 // that failed to spawn must be retried rather than pinned.
@@ -151,19 +155,30 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Text color="promptBorder" wrap="truncate-end">{rule(cols)}</Text>
+        <Text> </Text>
         <Button key="toggle" plain onPress={() => update($, isExpanded, v => !v)}>
-          <Text color="suggestion" wrap="truncate-end">{'━'.repeat(line.filled)}</Text>
-          <Text color="inactive" wrap="truncate-end">{'━'.repeat(line.empty)}</Text>
-          <Text wrap="truncate-end">{line.text}</Text>
+          {gradient(line.filled, BAR_FROM, BAR_TO).map(c => (
+            <Text color={c}>█</Text>
+          ))}
+          <Text color="inactive" wrap="truncate-end">{'░'.repeat(line.empty)}</Text>
+          <Text color={BAR_TO} wrap="truncate-end">{line.text.slice(0, line.countEnd)}</Text>
+          <Text dimColor wrap="truncate-end">{line.text.slice(line.countEnd, line.labelStart)}</Text>
+          <Text wrap="truncate-end">{line.text.slice(line.labelStart)}</Text>
         </Button>
         {expanded &&
           snap.tasks.map(t =>
             t.isDone ? (
-              <Text dimColor wrap="truncate-end">{`  ✓ ${t.n} ${t.name}`}</Text>
+              <Text wrap="truncate-end">
+                <Text color={BAR_TO}>{'  ✓'}</Text>
+                <Text color={DONE_NAME}>{` ${t.n} ${t.name}`}</Text>
+              </Text>
             ) : t === current ? (
               <Text wrap="truncate-end">
-                {`  ▶ ${t.n} ${t.name}`}
-                {snap.currentElapsedMs !== null ? `   ${formatElapsed(snap.currentElapsedMs)}` : ''}
+                <Text color={CURRENT}>{'  ▶'}</Text>
+                <Text bold>{` ${t.n} ${t.name}`}</Text>
+                <Text color={CURRENT}>
+                  {snap.currentElapsedMs !== null ? `   ${formatElapsed(snap.currentElapsedMs)}` : ''}
+                </Text>
               </Text>
             ) : (
               <Text dimColor wrap="truncate-end">{`  ○ ${t.n} ${t.name}`}</Text>

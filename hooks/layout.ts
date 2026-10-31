@@ -7,7 +7,7 @@ export function fitLine(
   etaText: string,
   label: string,
   isExpanded: boolean,
-): { filled: number; empty: number; text: string } {
+): { filled: number; empty: number; text: string; countEnd: number; labelStart: number } {
   const head = `  ${done}/${total} · ${etaText}`
   const tail = ` ${isExpanded ? '▾' : '▸'}`
 
@@ -22,9 +22,23 @@ export function fitLine(
   const bar = Math.max(1, cols - text.length)
   const filled = total > 0 ? Math.round((done / total) * bar) : 0
 
-  return { filled, empty: bar - filled, text }
+  // offsets into `text`: the count ends, the label (or the tail) starts
+  const countEnd = `  ${done}/${total}`.length
+  const labelStart = head.length + (labelPart ? ' · '.length : 0)
+
+  return { filled, empty: bar - filled, text, countEnd, labelStart }
 }
 
 export function rule(cols: number): string {
   return '─'.repeat(Math.max(cols, 0))
+}
+
+// n hex colors stepping evenly from `from` to `to` (both '#rrggbb').
+export function gradient(n: number, from: string, to: string): string[] {
+  const rgb = (h: string) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16))
+  const [a, b] = [rgb(from), rgb(to)]
+  return Array.from({ length: n }, (_, i) => {
+    const t = n > 1 ? i / (n - 1) : 0
+    return '#' + a.map((c, k) => Math.round(c + (b[k] - c) * t).toString(16).padStart(2, '0')).join('')
+  })
 }
