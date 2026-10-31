@@ -41,7 +41,7 @@ Clicking the line (a `Button`) or running `/progress` toggles it. Expanded, it l
 
 ### Hidden
 
-Nothing is drawn (`next(e)`) when the session has no master plan or the master plan is complete. Also defer to the engine when `e.props.hasSurvey` is set, as the band example does.
+Nothing is drawn (`next(e)`) when the session has no master plan, or the master plan isn't **in progress**. In progress means execution has started (an SDD ledger names the plan, or at least one task is done) and the plan isn't finished. A plan that's written but not started yet stays hidden (Dylan, 2026-10-31). Also defer to the engine when `e.props.hasSurvey` is set, as the band example does.
 
 ## The master plan
 
@@ -49,7 +49,7 @@ The tracked plan is one Superpowers implementation plan, `docs/superpowers/plans
 
 1. The plan file this session **writes** (a `Write`/`Edit` `tool.call` to a path matching `docs/superpowers/plans/*.md`). The most recent write wins.
 2. The plan this session **starts executing**: a write to an SDD ledger (`.superpowers/sdd/<workspace>/progress.md`) whose first line is `# SDD ledger — plan: <plan file path>`. That names the plan. *(Builder's call, approved: covers the "plan written in one session, run in a fresh one" case.)*
-3. Fallback: the newest plan file in `docs/superpowers/plans/` that still has unfinished tasks.
+3. Fallback: the newest plan file in `docs/superpowers/plans/` that's in progress (see Hidden).
 
 Older plans in the repo are ignored. The master only switches when 1 or 2 fires again.
 
