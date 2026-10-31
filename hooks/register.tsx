@@ -165,6 +165,7 @@ export const register: Register = on => {
           <Text dimColor wrap="truncate-end">{line.text.slice(line.countEnd, line.labelStart)}</Text>
           <Text wrap="truncate-end">{line.text.slice(line.labelStart)}</Text>
         </Button>
+        {expanded && <Text> </Text>}
         {expanded &&
           snap.tasks.map(t =>
             t.isDone ? (
